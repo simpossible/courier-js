@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package courier;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MethodOptions {
+  optional int32 cmd = 50001;
+}
