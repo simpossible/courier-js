@@ -239,3 +239,17 @@ describe('CourierClient', () => {
     await expect(callPromise).rejects.toThrow('timed out');
   });
 });
+
+ it('routes a call to the requested device', async () => {
+    const { client, mock } = setupClient();
+    const connected = client.connect();
+    mock._trigger('connect', {});
+    await connected;
+    const result = client.call('Status', 1, new Uint8Array(), { targetDeviceId: 'device-b' });
+    const [topic, frame] = mock.publish.mock.calls[0];
+    expect(topic).toBe('mrpc/request/Status/device/device-b');
+    mock._subCallback('mrpc/response/test-client', buildResponseFrame(frame.slice(10, 26), RESPONSE_CODE_OK, new Uint8Array([7])));
+    expect(Array.from(await result)).toEqual([7]);
+    await expect(client.call('Status', 1, new Uint8Array(), { targetDeviceId: '+' })).rejects.toThrow('device ID');
+    await client.close();
+ });

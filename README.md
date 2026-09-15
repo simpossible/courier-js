@@ -142,3 +142,13 @@ npm run test:watch # vitest --watch
 ## License
 
 MIT
+
+### 精确调用设备
+
+```typescript
+const response = await client.call('DeviceService', cmd, payload, {
+  targetDeviceId: 'device-001',
+});
+```
+
+省略选项保持原有共享分发。服务端需配置同一设备 ID（Go：`rpc.WithServerDeviceID`），并订阅 `mrpc/request/DeviceService/device/device-001`。目标离线按原有超时处理，重试不回退到共享入口。设备 ID 必须是非空 topic 段，不能包含 `/`、`+`、`#` 或 NUL。重新生成的 Protobuf 客户端方法也支持第二个 `options` 参数。

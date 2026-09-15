@@ -1,6 +1,6 @@
 import { encodeRequest, decodeResponse, RESPONSE_CODE_OK } from './codec.js';
 import { CourierError, timeoutError, transportError } from './errors.js';
-import { requestTopic, responseTopic } from './topic.js';
+import { requestTopic, responseTopic, directRequestTopic } from './topic.js';
 
 function uint8ToBytes(data: Uint8Array): Uint8Array {
   return new Uint8Array(data);
@@ -36,6 +36,10 @@ export function __setMqttConnect(fn: MqttConnectFn): void {
 function mqttConnect(url: string, opts: Record<string, unknown>): AnyMqttClient {
   const fn = _connectFn ?? loadMqttConnect();
   return fn(url, opts);
+}
+
+export interface CallOptions {
+  targetDeviceId?: string;
 }
 
 export interface CourierClientOptions {
@@ -172,7 +176,7 @@ export class CourierClient {
     }
   }
 
-  async call(serviceName: string, cmd: number, payload: Uint8Array): Promise<Uint8Array> {
+  async call(serviceName: string, cmd: number, payload: Uint8Array, options: CallOptions = {}): Promise<Uint8Array> {
     if (this.closed) throw new Error('courier/rpc: client closed');
     if (!this.mqttClient || !this.mqttClient.connected) {
       throw new Error('courier/rpc: not connected');
@@ -180,7 +184,9 @@ export class CourierClient {
 
     const requestId = newRequestId();
     const requestHex = toHex(requestId);
-    const reqTopic = requestTopic(serviceName);
+    const reqTopic = options.targetDeviceId === undefined
+      ? requestTopic(serviceName)
+      : directRequestTopic(serviceName, options.targetDeviceId);
     const frame = encodeRequest(cmd, requestId, null, payload);
 
     return new Promise<Uint8Array>((resolve, reject) => {
