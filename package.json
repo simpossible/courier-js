@@ -1,7 +1,7 @@
 {
   "name": "@simpossible/courier",
   "version": "0.1.0",
-  "description": "JavaScript Courier RPC client — wire-compatible with Go courier (MQTT + Protobuf)",
+  "description": "JavaScript Courier RPC client \u2014 wire-compatible with Go courier (MQTT + Protobuf)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -17,7 +17,9 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:integration": "bash scripts/test-integration.sh",
+    "test:integration:cases": "vitest run tests/mqtt.integration.test.ts"
   },
   "keywords": [
     "courier",
@@ -28,6 +30,7 @@
   "license": "MIT",
   "dependencies": {
     "mqtt": "^5.10.0",
+    "pako": "^3.0.2",
     "protobufjs": "^7.4.0"
   },
   "devDependencies": {

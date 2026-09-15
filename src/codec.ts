@@ -1,6 +1,11 @@
+import { Compression, compressPayload, decompressPayload } from './compression.js';
+
 export const PROTOCOL_VERSION = 1;
 export const REQUEST_HEADER_LEN = 28;
-export const RESPONSE_HEADER_LEN = 22;
+export const RESPONSE_HEADER_LEN = 24;
+export const COMPRESSION_PROTOCOL_VERSION = 2;
+export const REQUEST_HEADER_LEN_V2 = 29;
+export const RESPONSE_HEADER_LEN_V2 = 25;
 export const RESPONSE_CODE_OK = 0;
 
 function writeUint32BE(buf: Uint8Array, offset: number, value: number): void {
@@ -28,18 +33,24 @@ export function encodeRequest(
   requestId: Uint8Array,
   extensions: Uint8Array | null,
   payload: Uint8Array,
+  compression?: Compression,
 ): Uint8Array {
   const extLen = extensions ? extensions.length : 0;
-  const length = REQUEST_HEADER_LEN + extLen + payload.length;
+  if (requestId.length !== 16 || extLen > 65535) throw new Error('courier/codec: invalid request ID or extensions length');
+  const version = compression === undefined ? PROTOCOL_VERSION : COMPRESSION_PROTOCOL_VERSION;
+  const headerLen = compression === undefined ? REQUEST_HEADER_LEN : REQUEST_HEADER_LEN_V2;
+  if (compression !== undefined) payload = compressPayload(payload, compression);
+  const length = headerLen + extLen + payload.length;
   const buf = new Uint8Array(length);
 
   writeUint32BE(buf, 0, length);
-  writeUint16BE(buf, 4, PROTOCOL_VERSION);
+  writeUint16BE(buf, 4, version);
   writeUint32BE(buf, 6, cmd);
   buf.set(requestId, 10);
   writeUint16BE(buf, 26, extLen);
 
-  let offset = REQUEST_HEADER_LEN;
+  if (compression !== undefined) buf[28] = compression;
+  let offset = headerLen;
   if (extLen > 0 && extensions) {
     buf.set(extensions, offset);
     offset += extLen;
@@ -51,53 +62,74 @@ export function encodeRequest(
 
 export interface ResponseFrame {
   requestId: Uint8Array;
+  version: number;
+  compression: Compression;
   code: number;
   payload: Uint8Array;
 }
 
-export function decodeResponse(data: Uint8Array): ResponseFrame {
-  if (data.length < RESPONSE_HEADER_LEN) {
-    throw new Error(`courier/codec: response frame too short (${data.length} < ${RESPONSE_HEADER_LEN})`);
-  }
+// Response version is determined by the originating request, not guessed from payload bytes.
+export function decodeResponse(data: Uint8Array, version = PROTOCOL_VERSION): ResponseFrame {
+  const headerLen = responseHeaderLength(version);
+  const length = validateFrame(data, headerLen);
+  const compression = version === COMPRESSION_PROTOCOL_VERSION ? data[24] : Compression.None;
+  let payload = data.slice(headerLen, length);
+  if (version === COMPRESSION_PROTOCOL_VERSION) payload = new Uint8Array(decompressPayload(payload, compression));
+  return { requestId: data.slice(4, 20), version, compression, code: readUint32BE(data, 20), payload };
+}
 
-  const length = readUint32BE(data, 0);
-  const requestId = data.slice(4, 20);
-  const code = readUint16BE(data, 20);
-  const payload = data.slice(22, length);
-
-  return { requestId, code, payload };
+export function encodeResponse(requestId: Uint8Array, code: number, payload: Uint8Array, compression?: Compression): Uint8Array {
+  if (requestId.length !== 16) throw new Error('courier/codec: invalid request ID');
+  const headerLen = compression === undefined ? RESPONSE_HEADER_LEN : RESPONSE_HEADER_LEN_V2;
+  if (compression !== undefined) payload = compressPayload(payload, compression);
+  const frame = new Uint8Array(headerLen + payload.length);
+  writeUint32BE(frame, 0, frame.length);
+  frame.set(requestId, 4);
+  writeUint32BE(frame, 20, code);
+  if (compression !== undefined) frame[24] = compression;
+  frame.set(payload, headerLen);
+  return frame;
 }
 
 export function decodeRequest(data: Uint8Array): {
   length: number;
   version: number;
+  compression: Compression;
   cmd: number;
   requestId: Uint8Array;
   extensionsLen: number;
   extensions: Uint8Array;
   payload: Uint8Array;
 } {
-  if (data.length < REQUEST_HEADER_LEN) {
-    throw new Error(`courier/codec: request frame too short (${data.length} < ${REQUEST_HEADER_LEN})`);
-  }
-
-  const length = readUint32BE(data, 0);
-  if (data.length < length) {
-    throw new Error(`courier/codec: truncated request frame (have ${data.length}, need ${length})`);
-  }
-
+  validateFrame(data, REQUEST_HEADER_LEN);
   const version = readUint16BE(data, 4);
-  const cmd = readUint32BE(data, 6);
-  const requestId = data.slice(10, 26);
-  const extensionsLen = readUint16BE(data, 26);
-
-  let extensions = new Uint8Array(0);
-  let payloadOffset = REQUEST_HEADER_LEN;
-  if (extensionsLen > 0) {
-    extensions = data.slice(REQUEST_HEADER_LEN, REQUEST_HEADER_LEN + extensionsLen);
-    payloadOffset += extensionsLen;
+  if (version !== PROTOCOL_VERSION && version !== COMPRESSION_PROTOCOL_VERSION) {
+    throw new Error('courier/codec: unsupported protocol version');
   }
-  const payload = data.slice(payloadOffset, length);
+  const headerLen = version === PROTOCOL_VERSION ? REQUEST_HEADER_LEN : REQUEST_HEADER_LEN_V2;
+  const length = validateFrame(data, headerLen);
+  const extensionsLen = readUint16BE(data, 26);
+  const payloadOffset = headerLen + extensionsLen;
+  if (payloadOffset > length) throw new Error('courier/codec: invalid extensions length');
+  const compression = version === COMPRESSION_PROTOCOL_VERSION ? data[28] : Compression.None;
+  let payload = data.slice(payloadOffset, length);
+  if (version === COMPRESSION_PROTOCOL_VERSION) payload = new Uint8Array(decompressPayload(payload, compression));
+  return {
+    length, version, compression, cmd: readUint32BE(data, 6), requestId: data.slice(10, 26),
+    extensionsLen, extensions: data.slice(headerLen, payloadOffset), payload,
+  };
+}
 
-  return { length, version, cmd, requestId, extensionsLen, extensions, payload };
+function responseHeaderLength(version: number): number {
+  if (version === PROTOCOL_VERSION) return RESPONSE_HEADER_LEN;
+  if (version === COMPRESSION_PROTOCOL_VERSION) return RESPONSE_HEADER_LEN_V2;
+  throw new Error('courier/codec: unsupported protocol version');
+}
+
+function validateFrame(data: Uint8Array, headerLen: number): number {
+  if (data.length < headerLen) throw new Error('courier/codec: frame too short');
+  const length = readUint32BE(data, 0);
+  if (length < headerLen) throw new Error('courier/codec: invalid frame length');
+  if (length > data.length) throw new Error('courier/codec: truncated frame');
+  return length;
 }

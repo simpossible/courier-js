@@ -70,12 +70,12 @@ function setupClient(opts?: Record<string, unknown>): { client: CourierClient; m
 }
 
 function buildResponseFrame(requestId: Uint8Array, code: number, payload: Uint8Array): Buffer {
-  const length = 22 + payload.length;
+  const length = 24 + payload.length;
   const buf = Buffer.alloc(length);
   buf.writeUInt32BE(length, 0);
   buf.set(requestId, 4);
-  buf.writeUInt16BE(code, 20);
-  buf.set(payload, 22);
+  buf.writeUInt32BE(code, 20);
+  buf.set(payload, 24);
   return buf;
 }
 
@@ -253,3 +253,25 @@ describe('CourierClient', () => {
     await expect(client.call('Status', 1, new Uint8Array(), { targetDeviceId: '+' })).rejects.toThrow('device ID');
     await client.close();
  });
+
+it('handles concurrent legacy and compressed calls on one client', async () => {
+  const { client, mock } = setupClient();
+  const connected = client.connect();
+  mock._trigger('connect', {});
+  await connected;
+  const { Compression } = await import('../src/compression.js');
+  const { decodeRequest, encodeResponse } = await import('../src/codec.js');
+  const payload = new TextEncoder().encode('online '.repeat(1000));
+  const legacy = client.call('Status', 1, payload);
+  const compressed = client.call('Status', 1, payload, { compression: Compression.GZIP, targetDeviceId: 'device-b' });
+  const req = decodeRequest(mock.publish.mock.calls[1][1]);
+  expect(req.compression).toBe(Compression.GZIP);
+  expect(req.payload).toEqual(payload);
+  // Deliver in reverse order to ensure decoding uses each pending call's version.
+  mock._subCallback('mrpc/response/test-client', Buffer.from(encodeResponse(req.requestId, 0, payload, Compression.GZIP)));
+  const oldReq = decodeRequest(mock.publish.mock.calls[0][1]);
+  mock._subCallback('mrpc/response/test-client', Buffer.from(encodeResponse(oldReq.requestId, 0, payload)));
+  expect(Array.from(await compressed)).toEqual(Array.from(payload));
+  expect(Array.from(await legacy)).toEqual(Array.from(payload));
+  await client.close();
+});

@@ -146,7 +146,7 @@ function generateClientCode(services: ServiceDef[], pbImportPath: string): strin
 
     for (const method of svc.methods) {
       lines.push('');
-      lines.push(`  async ${toCamelCase(method.name)}(req: ${method.inputType}, options: { targetDeviceId?: string } = {}): Promise<${method.outputType}> {`);
+      lines.push(`  async ${toCamelCase(method.name)}(req: ${method.inputType}, options: Parameters<CourierClient["call"]>[3] = {}): Promise<${method.outputType}> {`);
       lines.push(`    const payload = ${method.inputType}.encode(req).finish();`);
       lines.push(`    const respPayload = await this.client.call(this.serviceName, ${method.cmd}, payload, options);`);
       lines.push(`    return ${method.outputType}.decode(respPayload);`);

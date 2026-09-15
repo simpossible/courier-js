@@ -96,8 +96,8 @@ describe('decodeResponse', () => {
     const view = new DataView(frame.buffer);
     view.setUint32(0, length, false);
     frame.set(requestId, 4);
-    view.setUint16(20, RESPONSE_CODE_OK, false);
-    frame.set(payload, 22);
+    view.setUint32(20, RESPONSE_CODE_OK, false);
+    frame.set(payload, 24);
 
     const resp = decodeResponse(frame);
 
@@ -115,8 +115,8 @@ describe('decodeResponse', () => {
     const view = new DataView(frame.buffer);
     view.setUint32(0, length, false);
     frame.set(requestId, 4);
-    view.setUint16(20, 500, false);
-    frame.set(errMsg, 22);
+    view.setUint32(20, 500, false);
+    frame.set(errMsg, 24);
 
     const resp = decodeResponse(frame);
 
@@ -134,7 +134,7 @@ describe('decodeResponse', () => {
     const view = new DataView(frame.buffer);
     view.setUint32(0, RESPONSE_HEADER_LEN, false);
     frame.set(requestId, 4);
-    view.setUint16(20, 0, false);
+    view.setUint32(20, 0, false);
 
     const resp = decodeResponse(frame);
     expect(resp.payload.length).toBe(0);

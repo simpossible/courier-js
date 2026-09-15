@@ -1,4 +1,5 @@
-import { encodeRequest, decodeResponse, RESPONSE_CODE_OK } from './codec.js';
+import { Compression } from './compression.js';
+import { encodeRequest, decodeResponse, RESPONSE_CODE_OK, PROTOCOL_VERSION, COMPRESSION_PROTOCOL_VERSION } from './codec.js';
 import { CourierError, timeoutError, transportError } from './errors.js';
 import { requestTopic, responseTopic, directRequestTopic } from './topic.js';
 
@@ -39,10 +40,12 @@ function mqttConnect(url: string, opts: Record<string, unknown>): AnyMqttClient 
 }
 
 export interface CallOptions {
+  compression?: Compression;
   targetDeviceId?: string;
 }
 
 export interface CourierClientOptions {
+  compression?: Compression;
   broker: string;
   clientId: string;
   username?: string;
@@ -57,6 +60,7 @@ export interface CourierClientOptions {
 }
 
 interface PendingCall {
+  version: number;
   resolve: (payload: Uint8Array) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -78,6 +82,7 @@ function toHex(bytes: Uint8Array): string {
 
 export class CourierClient {
   readonly clientId: string;
+  private readonly compression?: Compression;
   private readonly broker: string;
   private readonly timeout: number;
   private readonly retryCount: number;
@@ -96,6 +101,7 @@ export class CourierClient {
   private closed = false;
 
   constructor(options: CourierClientOptions) {
+    this.compression = options.compression;
     this.broker = options.broker;
     this.clientId = options.clientId;
     this.username = options.username;
@@ -187,7 +193,9 @@ export class CourierClient {
     const reqTopic = options.targetDeviceId === undefined
       ? requestTopic(serviceName)
       : directRequestTopic(serviceName, options.targetDeviceId);
-    const frame = encodeRequest(cmd, requestId, null, payload);
+    const compression = options.compression ?? this.compression;
+    const version = compression === undefined ? PROTOCOL_VERSION : COMPRESSION_PROTOCOL_VERSION;
+    const frame = encodeRequest(cmd, requestId, null, payload, compression);
 
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -195,7 +203,7 @@ export class CourierClient {
         reject(timeoutError(this.timeout));
       }, this.timeout);
 
-      this.pending.set(requestHex, { resolve, reject, timer });
+      this.pending.set(requestHex, { resolve, reject, timer, version });
 
       const doPublish = (): void => {
         if (!this.mqttClient) return;
@@ -286,11 +294,11 @@ export class CourierClient {
         bytes = new Uint8Array(raw);
       }
 
-      const resp = decodeResponse(bytes);
-      const requestHex = toHex(resp.requestId);
-
+      if (bytes.length < 20) return;
+      const requestHex = toHex(bytes.subarray(4, 20));
       const call = this.pending.get(requestHex);
       if (!call) return;
+      const resp = decodeResponse(bytes, call.version);
 
       this.pending.delete(requestHex);
       clearTimeout(call.timer);

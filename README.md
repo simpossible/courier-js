@@ -122,7 +122,7 @@ The binary frame protocol is identical to Go courier:
 
 **Response Frame** (server → client):
 ```
-[4B length BE][16B requestID][2B code BE][payload...]
+[4B length BE][16B requestID][4B code BE][payload...]
 ```
 
 **MQTT Topics**:
@@ -152,3 +152,27 @@ const response = await client.call('DeviceService', cmd, payload, {
 ```
 
 省略选项保持原有共享分发。服务端需配置同一设备 ID（Go：`rpc.WithServerDeviceID`），并订阅 `mrpc/request/DeviceService/device/device-001`。目标离线按原有超时处理，重试不回退到共享入口。设备 ID 必须是非空 topic 段，不能包含 `/`、`+`、`#` 或 NUL。重新生成的 Protobuf 客户端方法也支持第二个 `options` 参数。
+
+### GZIP 压缩
+
+```typescript
+import { Compression } from '@simpossible/courier';
+
+// 可在 CourierClient 构造选项中设置 compression，或为单次调用设置：
+const response = await client.call('DeviceService', cmd, payload, {
+  targetDeviceId: 'device-001',
+  compression: Compression.GZIP,
+});
+```
+
+服务端解压后调用处理器，并按相同算法压缩响应。客户端自动解压，返回原始 payload。`Compression.None` 覆盖客户端默认选项，使用不压缩的 v2；完全省略压缩配置保持 v1。生成的 Protobuf 客户端方法也接受该选项。
+
+v2 请求头为 29 字节：在原 header 末尾、extensions 前增加 `Compression`（偏移 28）；响应头为 25 字节：在 4 字节 Code 后增加 `Compression`（偏移 24）。算法 `0=None`、`1=GZIP`。响应版本根据对应请求确定；直接解码 v2 响应使用 `decodeResponse(data, 2)`。原始及解压后 payload 上限为 16 MiB，未知算法和损坏数据会被拒绝。
+
+先升级全部服务端实例，再开启客户端压缩；旧服务端不支持 v2，无自动降级。此次也将 JS 响应 Code 从 uint16 修正为与 Go/Dart 一致的 uint32，早期使用 2 字节 Code 的端点需要升级。
+
+### 本地 MQTT 联调
+
+运行 `npm run test:integration`，自动启动临时 MQTT 5 broker 与两个 Go 服务实例，执行 `tests/mqtt.integration.test.ts`，结束后关闭服务。需要 Python 3、Go、Node/npm，并在 `../courier` 检出 Go 仓库（可用 `COURIER_GO_DIR` 覆盖）。依赖已安装可运行 `npm run test:integration -- --skip-install`。普通 `npm test` 不连接 broker。
+
+测试覆盖三种协议模式、实际压缩帧、并发、设备直达、共享分发、错误响应和离线超时。在 Go 仓库执行 `./scripts/test-integration.sh` 可一次运行全部 SDK。
